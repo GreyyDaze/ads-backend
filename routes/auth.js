@@ -3,6 +3,8 @@ import axios from "axios";
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 const router = express.Router();
+import FBUser from '../models/FBUser.js';
+
 
 router.post("/exchange-code", async (req, res) => {
   const { code } = req.body;
@@ -27,7 +29,7 @@ router.post("/exchange-code", async (req, res) => {
 
     // Decode ID token to get user info
     const decoded = jwt.decode(id_token);
-    // console.log("Decoded ID token:", decoded);
+    console.log("Decoded ID token:", decoded);
 
     let user = await User.findOne({ googleId: decoded.sub });
 
@@ -63,6 +65,61 @@ router.post("/exchange-code", async (req, res) => {
   }
 });
 
+router.post('/fb-login', async (req, res) => {
+  const { code } = req.body;
+
+  if (!code) {
+    return res.status(400).json({ error: 'No authorization code provided.' });
+  }
+
+  try {
+    // Exchange the code for an access token
+    const response = await axios.get('https://graph.facebook.com/v17.0/oauth/access_token', {
+      params: {
+        client_id: process.env.FACEBOOK_APP_ID,
+        client_secret: process.env.FACEBOOK_APP_SECRET,
+        redirect_uri: 'http://localhost:8080/',
+        code,
+      },
+    });
+
+    const accessToken = response.data.access_token;
+    console.log(accessToken, 'access_token');
+
+    // Fetch user data using the access token
+    const userInfo = await axios.get('https://graph.facebook.com/me', {
+      params: {
+        access_token: accessToken,
+        fields: 'id,name,email,picture',
+      },
+    });
+
+    const { id: facebookId, name } = userInfo.data;
+
+    // Check if user already exists
+    let user = await FBUser.findOne({ facebookId });
+
+    if (user) {
+      // Update access token if user exists
+      user.accessToken = accessToken;
+      await user.save();
+    } else {
+      // Create a new user if not exists
+      user = new FBUser({
+        facebookId,
+        name,
+        accessToken,
+      });
+      await user.save();
+    }
+
+    // Send the user data back to the frontend
+    res.json({ user: { facebookId, name } });
+  } catch (err) {
+    console.error('Error during Facebook login:', err.response?.data || err.message);
+    res.status(500).json({ error: 'Failed to login with Facebook.' });
+  }
+});
 
 // Create an endpoint to revoke Google OAuth token when disconnecting
 router.post("/disconnect", async (req, res) => {
@@ -105,8 +162,7 @@ router.post("/disconnect", async (req, res) => {
       console.error("Error revoking Google token:", error);
       return res.status(500).json({ error: "Internal Server Error" });
     }
-  });
+});
   
 export default router;
-
 
